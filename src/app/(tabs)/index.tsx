@@ -19,7 +19,7 @@ const categories = [
   "Others",
 ];
 
-const API_URL = "http://10.0.2.2:5000";
+const API_URL = "https://student-campus-marketplace-api.onrender.com";
 
 type Listing = {
   id: number;
@@ -168,7 +168,7 @@ export default function HomeScreen() {
                 </Text>
 
                 <Text className="mt-1 text-base font-semibold text-blue-600">
-                  â‚¦{Number(listing.price).toLocaleString()}
+                  ?{Number(listing.price).toLocaleString()}
                 </Text>
 
                 <Text className="mt-2 text-sm text-gray-500">
@@ -176,7 +176,7 @@ export default function HomeScreen() {
                 </Text>
 
                 <Text className="mt-1 text-sm text-gray-500">
-                  {listing.condition} ï¿½ {listing.category}
+                  {listing.condition} · {listing.category}
                 </Text>
 
                 <Text className="mt-1 text-sm text-gray-500">
