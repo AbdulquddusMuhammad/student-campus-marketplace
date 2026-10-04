@@ -17,6 +17,12 @@ type User = {
   created_at: string;
 };
 
+type AuthResponse = {
+  accessToken: string;
+  refreshToken: string;
+  user: User;
+};
+
 type AuthContextType = {
   user: User | null;
   token: string | null;
@@ -33,7 +39,8 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_KEY = 'student_marketplace_token';
+const ACCESS_TOKEN_KEY = 'student_marketplace_access_token';
+const REFRESH_TOKEN_KEY = 'student_marketplace_refresh_token';
 const USER_KEY = 'student_marketplace_user';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -47,26 +54,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function loadStoredAuth() {
     try {
-      const storedToken = await SecureStore.getItemAsync(TOKEN_KEY);
+      const storedAccessToken = await SecureStore.getItemAsync(
+        ACCESS_TOKEN_KEY,
+      );
+
+      const storedRefreshToken = await SecureStore.getItemAsync(
+        REFRESH_TOKEN_KEY,
+      );
+
       const storedUser = await SecureStore.getItemAsync(USER_KEY);
 
-      if (storedToken && storedUser) {
-        setToken(storedToken);
-        setUser(JSON.parse(storedUser));
+      if (!storedRefreshToken || !storedUser) {
+        await clearStoredAuth();
+        return;
       }
+
+      const parsedUser: User = JSON.parse(storedUser);
+
+      if (storedAccessToken) {
+        setToken(storedAccessToken);
+        setUser(parsedUser);
+        return;
+      }
+
+      const refreshedAuth = await refreshLogin(storedRefreshToken);
+
+      await saveAuth(
+        refreshedAuth.accessToken,
+        refreshedAuth.refreshToken,
+        refreshedAuth.user,
+      );
     } catch (error) {
       console.error('Load authentication error:', error);
+
+      await clearStoredAuth();
     } finally {
       setLoading(false);
     }
   }
 
-  async function saveAuth(authToken: string, authUser: User) {
-    await SecureStore.setItemAsync(TOKEN_KEY, authToken);
-    await SecureStore.setItemAsync(USER_KEY, JSON.stringify(authUser));
+  async function saveAuth(
+    accessToken: string,
+    refreshToken: string,
+    authUser: User,
+  ) {
+    await SecureStore.setItemAsync(
+      ACCESS_TOKEN_KEY,
+      accessToken,
+    );
 
-    setToken(authToken);
+    await SecureStore.setItemAsync(
+      REFRESH_TOKEN_KEY,
+      refreshToken,
+    );
+
+    await SecureStore.setItemAsync(
+      USER_KEY,
+      JSON.stringify(authUser),
+    );
+
+    setToken(accessToken);
     setUser(authUser);
+  }
+
+  async function refreshLogin(
+    refreshToken: string,
+  ): Promise<AuthResponse> {
+    const response = await fetch(`${API_URL}/api/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        refreshToken,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.message || 'Your login session has expired',
+      );
+    }
+
+    return data;
   }
 
   async function login(email: string, password: string) {
@@ -87,7 +159,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(data.message || 'Could not log in');
     }
 
-    await saveAuth(data.token, data.user);
+    await saveAuth(
+      data.accessToken,
+      data.refreshToken,
+      data.user,
+    );
   }
 
   async function register(
@@ -112,18 +188,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.message || 'Could not create account');
+      throw new Error(
+        data.message || 'Could not create account',
+      );
     }
 
-    await saveAuth(data.token, data.user);
+    await saveAuth(
+      data.accessToken,
+      data.refreshToken,
+      data.user,
+    );
   }
 
-  async function logout() {
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
+  async function clearStoredAuth() {
+    await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
     await SecureStore.deleteItemAsync(USER_KEY);
 
     setToken(null);
     setUser(null);
+  }
+
+  async function logout() {
+    await clearStoredAuth();
   }
 
   return (
@@ -146,7 +233,9 @@ export function useAuth() {
   const context = useContext(AuthContext);
 
   if (!context) {
-    throw new Error('useAuth must be used inside AuthProvider');
+    throw new Error(
+      'useAuth must be used inside AuthProvider',
+    );
   }
 
   return context;

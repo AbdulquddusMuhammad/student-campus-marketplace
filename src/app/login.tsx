@@ -32,7 +32,7 @@ export default function LoginScreen() {
 
       await login(email.trim(), password);
 
-      router.replace('/(tabs)/index');
+      router.replace('/');
     } catch (error) {
       setError(
         error instanceof Error ? error.message : 'Could not log in',
@@ -126,4 +126,3 @@ export default function LoginScreen() {
     </SafeAreaView>
   );
 }
-

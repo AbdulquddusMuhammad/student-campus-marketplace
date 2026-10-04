@@ -12,6 +12,35 @@ if (!JWT_SECRET) {
   throw new Error('JWT_SECRET is not configured');
 }
 
+const ACCESS_TOKEN_EXPIRES_IN = '15m';
+const REFRESH_TOKEN_EXPIRES_IN = '30d';
+
+function createAccessToken(userId) {
+  return jwt.sign(
+    {
+      userId,
+      type: 'access',
+    },
+    JWT_SECRET,
+    {
+      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    },
+  );
+}
+
+function createRefreshToken(userId) {
+  return jwt.sign(
+    {
+      userId,
+      type: 'refresh',
+    },
+    JWT_SECRET,
+    {
+      expiresIn: REFRESH_TOKEN_EXPIRES_IN,
+    },
+  );
+}
+
 router.post('/register', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
@@ -52,19 +81,13 @@ router.post('/register', async (req, res) => {
 
     const user = result.rows[0];
 
-    const token = jwt.sign(
-      {
-        userId: user.id,
-      },
-      JWT_SECRET,
-      {
-        expiresIn: '7d',
-      },
-    );
+    const accessToken = createAccessToken(user.id);
+    const refreshToken = createRefreshToken(user.id);
 
     res.status(201).json({
       message: 'Account created successfully',
-      token,
+      accessToken,
+      refreshToken,
       user,
     });
   } catch (error) {
@@ -120,21 +143,15 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const token = jwt.sign(
-      {
-        userId: user.id,
-      },
-      JWT_SECRET,
-      {
-        expiresIn: '7d',
-      },
-    );
+    const accessToken = createAccessToken(user.id);
+    const refreshToken = createRefreshToken(user.id);
 
     delete user.password_hash;
 
     res.json({
       message: 'Login successful',
-      token,
+      accessToken,
+      refreshToken,
       user,
     });
   } catch (error) {
@@ -142,6 +159,65 @@ router.post('/login', async (req, res) => {
 
     res.status(500).json({
       message: 'Could not log in',
+    });
+  }
+});
+
+router.post('/refresh', async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(401).json({
+        message: 'Refresh token is required',
+      });
+    }
+
+    let decoded;
+
+    try {
+      decoded = jwt.verify(refreshToken, JWT_SECRET);
+    } catch (error) {
+      return res.status(401).json({
+        message: 'Refresh token is invalid or expired',
+      });
+    }
+
+    if (decoded.type !== 'refresh') {
+      return res.status(401).json({
+        message: 'Invalid refresh token',
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT id, name, email, phone, created_at
+       FROM users
+       WHERE id = $1`,
+      [decoded.userId],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        message: 'User account no longer exists',
+      });
+    }
+
+    const user = result.rows[0];
+
+    const accessToken = createAccessToken(user.id);
+    const newRefreshToken = createRefreshToken(user.id);
+
+    res.json({
+      message: 'Token refreshed successfully',
+      accessToken,
+      refreshToken: newRefreshToken,
+      user,
+    });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+
+    res.status(500).json({
+      message: 'Could not refresh login',
     });
   }
 });

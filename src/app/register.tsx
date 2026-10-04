@@ -51,7 +51,7 @@ export default function RegisterScreen() {
         password,
       );
 
-      router.replace('/(tabs)/index');
+      router.replace('/');
     } catch (error) {
       setError(
         error instanceof Error ? error.message : 'Could not create account',
@@ -193,4 +193,3 @@ export default function RegisterScreen() {
     </SafeAreaView>
   );
 }
-
