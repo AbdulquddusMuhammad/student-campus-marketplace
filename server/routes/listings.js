@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 
 const pool = require('../db');
+const requireAuth = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -83,6 +84,59 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to get listings',
+    });
+  }
+});
+
+router.get('/mine', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+        SELECT
+          listings.id,
+          listings.title,
+          listings.description,
+          listings.price,
+          listings.category,
+          listings.condition,
+          listings.pickup_location,
+          listings.created_at,
+          users.name AS seller_name,
+          universities.name AS university_name,
+          COALESCE(
+            JSON_AGG(
+              listing_images.image_url
+              ORDER BY listing_images.id
+            ) FILTER (WHERE listing_images.id IS NOT NULL),
+            '[]'
+          ) AS images
+        FROM listings
+        JOIN users
+          ON listings.seller_id = users.id
+        JOIN universities
+          ON listings.university_id = universities.id
+        LEFT JOIN listing_images
+          ON listings.id = listing_images.listing_id
+        WHERE listings.seller_id = $1
+        GROUP BY
+          listings.id,
+          users.name,
+          universities.name
+        ORDER BY listings.created_at DESC
+      `,
+      [req.userId]
+    );
+
+    res.json({
+      status: 'ok',
+      listings: result.rows,
+    });
+  } catch (error) {
+    console.error('Get my listings error:', error);
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get your listings',
     });
   }
 });
