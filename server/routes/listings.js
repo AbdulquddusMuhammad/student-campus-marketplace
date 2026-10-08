@@ -1,20 +1,32 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 
 const pool = require('../db');
 const requireAuth = require('../middleware/auth');
 
 const router = express.Router();
 
+const uploadsDirectory = path.join(__dirname, '..', 'uploads');
+
+if (!fs.existsSync(uploadsDirectory)) {
+  fs.mkdirSync(uploadsDirectory, {
+    recursive: true,
+  });
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, '..', 'uploads'));
+    cb(null, uploadsDirectory);
   },
 
   filename: (req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
-    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+
+    const uniqueName = `${Date.now()}-${Math.round(
+      Math.random() * 1e9,
+    )}${extension}`;
 
     cb(null, uniqueName);
   },
@@ -71,7 +83,7 @@ router.get('/', async (req, res) => {
           users.name,
           universities.name
         ORDER BY listings.created_at DESC
-      `
+      `,
     );
 
     res.json({
@@ -124,7 +136,7 @@ router.get('/mine', requireAuth, async (req, res) => {
           universities.name
         ORDER BY listings.created_at DESC
       `,
-      [req.userId]
+      [req.userId],
     );
 
     res.json({
@@ -141,62 +153,81 @@ router.get('/mine', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/:listingId/images', upload.single('image'), async (req, res) => {
-  try {
-    const { listingId } = req.params;
+router.post(
+  '/:listingId/images',
+  requireAuth,
+  upload.single('image'),
+  async (req, res) => {
+    try {
+      const { listingId } = req.params;
 
-    if (!req.file) {
-      return res.status(400).json({
+      if (!req.file) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Image is required',
+        });
+      }
+
+      const listingResult = await pool.query(
+        `
+          SELECT id, seller_id
+          FROM listings
+          WHERE id = $1
+        `,
+        [listingId],
+      );
+
+      if (listingResult.rows.length === 0) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Listing not found',
+        });
+      }
+
+      const listing = listingResult.rows[0];
+
+      if (listing.seller_id !== req.userId) {
+        return res.status(403).json({
+          status: 'error',
+          message: 'You can only upload images to your own listings',
+        });
+      }
+
+      const imageUrl = `${req.protocol}://${req.get(
+        'host',
+      )}/uploads/${req.file.filename}`;
+
+      const imageResult = await pool.query(
+        `
+          INSERT INTO listing_images (
+            listing_id,
+            image_url
+          )
+          VALUES ($1, $2)
+          RETURNING *
+        `,
+        [listingId, imageUrl],
+      );
+
+      res.status(201).json({
+        status: 'ok',
+        message: 'Image uploaded successfully',
+        image: imageResult.rows[0],
+      });
+    } catch (error) {
+      console.error('Upload listing image error:', error);
+
+      res.status(500).json({
         status: 'error',
-        message: 'Image is required',
+        message: 'Failed to upload image',
       });
     }
+  },
+);
 
-    const listingResult = await pool.query(
-      'SELECT id FROM listings WHERE id = $1',
-      [listingId]
-    );
-
-    if (listingResult.rows.length === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Listing not found',
-      });
-    }
-
-    const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-
-    const imageResult = await pool.query(
-      `
-        INSERT INTO listing_images (
-          listing_id,
-          image_url
-        )
-        VALUES ($1, $2)
-        RETURNING *
-      `,
-      [listingId, imageUrl]
-    );
-
-    res.status(201).json({
-      status: 'ok',
-      message: 'Image uploaded successfully',
-      image: imageResult.rows[0],
-    });
-  } catch (error) {
-    console.error('Upload listing image error:', error);
-
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to upload image',
-    });
-  }
-});
-
-router.post('/create', async (req, res) => {
+router.post('/create', requireAuth, async (req, res) => {
   try {
     const {
-      sellerId,
       universityId,
       title,
       description,
@@ -207,7 +238,6 @@ router.post('/create', async (req, res) => {
     } = req.body;
 
     if (
-      !sellerId ||
       !universityId ||
       !title ||
       !description ||
@@ -238,7 +268,7 @@ router.post('/create', async (req, res) => {
         RETURNING *
       `,
       [
-        sellerId,
+        req.userId,
         universityId,
         title,
         description,
@@ -246,7 +276,7 @@ router.post('/create', async (req, res) => {
         category,
         condition,
         pickupLocation,
-      ]
+      ],
     );
 
     res.status(201).json({
@@ -264,12 +294,11 @@ router.post('/create', async (req, res) => {
   }
 });
 
-router.post('/', upload.array('images', 5), async (req, res) => {
+router.post('/', requireAuth, upload.array('images', 5), async (req, res) => {
   const client = await pool.connect();
 
   try {
     const {
-      sellerId,
       universityId,
       title,
       description,
@@ -280,7 +309,6 @@ router.post('/', upload.array('images', 5), async (req, res) => {
     } = req.body;
 
     if (
-      !sellerId ||
       !universityId ||
       !title ||
       !description ||
@@ -320,7 +348,7 @@ router.post('/', upload.array('images', 5), async (req, res) => {
         RETURNING *
       `,
       [
-        sellerId,
+        req.userId,
         universityId,
         title,
         description,
@@ -328,13 +356,15 @@ router.post('/', upload.array('images', 5), async (req, res) => {
         category,
         condition,
         pickupLocation,
-      ]
+      ],
     );
 
     const listing = listingResult.rows[0];
 
     for (const file of req.files) {
-      const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
+      const imageUrl = `${req.protocol}://${req.get(
+        'host',
+      )}/uploads/${file.filename}`;
 
       await client.query(
         `
@@ -344,7 +374,7 @@ router.post('/', upload.array('images', 5), async (req, res) => {
           )
           VALUES ($1, $2)
         `,
-        [listing.id, imageUrl]
+        [listing.id, imageUrl],
       );
     }
 
