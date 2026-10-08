@@ -1,7 +1,8 @@
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   ScrollView,
   Text,
@@ -9,6 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
+import { useAuth } from "@/context/auth-context";
 
 const categories = [
   "Furniture",
@@ -36,9 +39,15 @@ type Listing = {
 };
 
 export default function HomeScreen() {
+  const router = useRouter();
+
+  const { user, authenticatedFetch } = useAuth();
+
   const [listings, setListings] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [messagingListingId, setMessagingListingId] =
+    useState<number | null>(null);
 
   const fetchListings = useCallback(async () => {
     try {
@@ -68,6 +77,60 @@ export default function HomeScreen() {
     }, [fetchListings]),
   );
 
+  async function handleMessageSeller(listingId: number) {
+    if (!user) {
+      Alert.alert(
+        "Login required",
+        "Please log in to message a seller.",
+      );
+
+      return;
+    }
+
+    try {
+      setMessagingListingId(listingId);
+
+      const response = await authenticatedFetch(
+        `${API_URL}/api/messages/conversations`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            listingId,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Could not start the conversation",
+        );
+      }
+
+      router.push({
+        pathname: "/chat/[conversationId]",
+        params: {
+          conversationId: String(data.conversation.id),
+        },
+      });
+    } catch (error) {
+      console.error("Message seller error:", error);
+
+      Alert.alert(
+        "Could not start conversation",
+        error instanceof Error
+          ? error.message
+          : "Something went wrong. Please try again.",
+      );
+    } finally {
+      setMessagingListingId(null);
+    }
+  }
+
   return (
     <View className="flex-1 bg-gray-50">
       <ScrollView
@@ -76,7 +139,9 @@ export default function HomeScreen() {
       >
         {/* Header */}
         <View className="bg-blue-600 px-5 pb-7 pt-14">
-          <Text className="text-2xl font-bold text-white">Campus Market</Text>
+          <Text className="text-2xl font-bold text-white">
+            Campus Market
+          </Text>
 
           <Text className="mt-1 text-sm text-blue-100">
             Buy and sell things around your campus.
@@ -92,7 +157,9 @@ export default function HomeScreen() {
 
         {/* Categories */}
         <View className="px-5 pt-6">
-          <Text className="text-xl font-bold text-gray-900">Categories</Text>
+          <Text className="text-xl font-bold text-gray-900">
+            Categories
+          </Text>
 
           <ScrollView
             horizontal
@@ -104,7 +171,9 @@ export default function HomeScreen() {
                 key={category}
                 className="mr-3 rounded-full bg-white px-5 py-3"
               >
-                <Text className="font-medium text-gray-700">{category}</Text>
+                <Text className="font-medium text-gray-700">
+                  {category}
+                </Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -118,7 +187,9 @@ export default function HomeScreen() {
             </Text>
 
             <TouchableOpacity>
-              <Text className="font-semibold text-blue-600">See all</Text>
+              <Text className="font-semibold text-blue-600">
+                See all
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -127,20 +198,26 @@ export default function HomeScreen() {
             <View className="mt-6 items-center py-8">
               <ActivityIndicator size="large" />
 
-              <Text className="mt-3 text-gray-500">Loading listings...</Text>
+              <Text className="mt-3 text-gray-500">
+                Loading listings...
+              </Text>
             </View>
           )}
 
           {/* Error */}
           {!loading && error !== "" && (
             <View className="mt-4 rounded-2xl bg-white p-5">
-              <Text className="text-center text-red-500">{error}</Text>
+              <Text className="text-center text-red-500">
+                {error}
+              </Text>
 
               <TouchableOpacity
                 onPress={fetchListings}
                 className="mt-4 self-center rounded-xl bg-blue-600 px-5 py-3"
               >
-                <Text className="font-semibold text-white">Try Again</Text>
+                <Text className="font-semibold text-white">
+                  Try Again
+                </Text>
               </TouchableOpacity>
             </View>
           )}
@@ -149,7 +226,10 @@ export default function HomeScreen() {
           {!loading &&
             error === "" &&
             listings.map((listing) => (
-              <View key={listing.id} className="mt-4 rounded-2xl bg-white p-4">
+              <View
+                key={listing.id}
+                className="mt-4 rounded-2xl bg-white p-4"
+              >
                 {/* Image */}
                 {listing.images && listing.images.length > 0 ? (
                   <Image
@@ -159,7 +239,9 @@ export default function HomeScreen() {
                   />
                 ) : (
                   <View className="h-40 items-center justify-center rounded-xl bg-gray-200">
-                    <Text className="text-gray-500">No image</Text>
+                    <Text className="text-gray-500">
+                      No image
+                    </Text>
                   </View>
                 )}
 
@@ -168,7 +250,8 @@ export default function HomeScreen() {
                 </Text>
 
                 <Text className="mt-1 text-base font-semibold text-blue-600">
-                  ?{Number(listing.price).toLocaleString()}
+                  {"\u20A6"}
+                  {Number(listing.price).toLocaleString("en-NG")}
                 </Text>
 
                 <Text className="mt-2 text-sm text-gray-500">
@@ -176,12 +259,34 @@ export default function HomeScreen() {
                 </Text>
 
                 <Text className="mt-1 text-sm text-gray-500">
-                  {listing.condition} · {listing.category}
+                  {listing.condition} {"\u2022"} {listing.category}
                 </Text>
 
                 <Text className="mt-1 text-sm text-gray-500">
                   Pickup: {listing.pickup_location}
                 </Text>
+
+                {/* Seller */}
+                <Text className="mt-3 text-sm text-gray-500">
+                  Seller: {listing.seller_name}
+                </Text>
+
+                {/* Message Seller */}
+                <TouchableOpacity
+                  onPress={() => handleMessageSeller(listing.id)}
+                  disabled={messagingListingId === listing.id}
+                  className={`mt-4 items-center rounded-xl px-4 py-3 ${
+                    messagingListingId === listing.id
+                      ? "bg-gray-300"
+                      : "bg-blue-600"
+                  }`}
+                >
+                  <Text className="font-bold text-white">
+                    {messagingListingId === listing.id
+                      ? "Opening..."
+                      : "Message Seller"}
+                  </Text>
+                </TouchableOpacity>
               </View>
             ))}
 
@@ -198,7 +303,9 @@ export default function HomeScreen() {
 
       {/* Sell button */}
       <TouchableOpacity className="absolute bottom-6 right-5 rounded-full bg-blue-600 px-6 py-4 shadow-lg">
-        <Text className="font-bold text-white">+ Sell Item</Text>
+        <Text className="font-bold text-white">
+          + Sell Item
+        </Text>
       </TouchableOpacity>
     </View>
   );
