@@ -6,6 +6,7 @@ require("dotenv").config();
 const pool = require("./db");
 const listingsRouter = require("./routes/listings");
 const authRouter = require("./routes/auth");
+const messagesRouter = require("./routes/messages");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -49,6 +50,7 @@ app.get("/api/db-test", async (req, res) => {
 
 app.use("/api/auth", authRouter);
 app.use("/api/listings", listingsRouter);
+app.use("/api/messages", messagesRouter);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
