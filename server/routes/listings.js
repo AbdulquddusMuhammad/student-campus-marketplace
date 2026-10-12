@@ -1,39 +1,20 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+﻿const express = require("express");
+const multer = require("multer");
+const { v2: cloudinary } = require("cloudinary");
 
-const pool = require('../db');
-const requireAuth = require('../middleware/auth');
+const pool = require("../db");
+const requireAuth = require("../middleware/auth");
 
 const router = express.Router();
 
-const uploadsDirectory = path.join(__dirname, '..', 'uploads');
-
-if (!fs.existsSync(uploadsDirectory)) {
-  fs.mkdirSync(uploadsDirectory, {
-    recursive: true,
-  });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDirectory);
-  },
-
-  filename: (req, file, cb) => {
-    const extension = path.extname(file.originalname).toLowerCase();
-
-    const uniqueName = `${Date.now()}-${Math.round(
-      Math.random() * 1e9,
-    )}${extension}`;
-
-    cb(null, uniqueName);
-  },
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
 
   limits: {
     files: 5,
@@ -41,15 +22,59 @@ const upload = multer({
   },
 
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    if (file.mimetype.startsWith("image/")) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(new Error("Only image files are allowed"));
     }
   },
 });
 
-router.get('/', async (req, res) => {
+function ensureCloudinaryConfigured() {
+  const requiredVariables = [
+    "CLOUDINARY_CLOUD_NAME",
+    "CLOUDINARY_API_KEY",
+    "CLOUDINARY_API_SECRET",
+  ];
+
+  const missing = requiredVariables.filter((name) => !process.env[name]);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing Cloudinary environment variables: ${missing.join(", ")}`,
+    );
+  }
+}
+
+async function uploadImageToCloudinary(file) {
+  ensureCloudinaryConfigured();
+
+  const dataUri =
+    `data:${file.mimetype};base64,` + file.buffer.toString("base64");
+
+  return cloudinary.uploader.upload(dataUri, {
+    folder: "unilink/listings",
+    resource_type: "image",
+  });
+}
+
+async function deleteCloudinaryImages(images) {
+  const results = await Promise.allSettled(
+    images.map((image) =>
+      cloudinary.uploader.destroy(image.public_id, {
+        resource_type: "image",
+      }),
+    ),
+  );
+
+  results.forEach((result) => {
+    if (result.status === "rejected") {
+      console.error("Cloudinary cleanup failed:", result.reason);
+    }
+  });
+}
+
+router.get("/", async (req, res) => {
   try {
     const result = await pool.query(
       `
@@ -87,20 +112,20 @@ router.get('/', async (req, res) => {
     );
 
     res.json({
-      status: 'ok',
+      status: "ok",
       listings: result.rows,
     });
   } catch (error) {
-    console.error('Get listings error:', error);
+    console.error("Get listings error:", error);
 
     res.status(500).json({
-      status: 'error',
-      message: 'Failed to get listings',
+      status: "error",
+      message: "Failed to get listings",
     });
   }
 });
 
-router.get('/mine', requireAuth, async (req, res) => {
+router.get("/mine", requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `
@@ -140,31 +165,33 @@ router.get('/mine', requireAuth, async (req, res) => {
     );
 
     res.json({
-      status: 'ok',
+      status: "ok",
       listings: result.rows,
     });
   } catch (error) {
-    console.error('Get my listings error:', error);
+    console.error("Get my listings error:", error);
 
     res.status(500).json({
-      status: 'error',
-      message: 'Failed to get your listings',
+      status: "error",
+      message: "Failed to get your listings",
     });
   }
 });
 
 router.post(
-  '/:listingId/images',
+  "/:listingId/images",
   requireAuth,
-  upload.single('image'),
+  upload.single("image"),
   async (req, res) => {
+    let cloudinaryImage;
+
     try {
       const { listingId } = req.params;
 
       if (!req.file) {
         return res.status(400).json({
-          status: 'error',
-          message: 'Image is required',
+          status: "error",
+          message: "Image is required",
         });
       }
 
@@ -179,8 +206,8 @@ router.post(
 
       if (listingResult.rows.length === 0) {
         return res.status(404).json({
-          status: 'error',
-          message: 'Listing not found',
+          status: "error",
+          message: "Listing not found",
         });
       }
 
@@ -188,14 +215,12 @@ router.post(
 
       if (listing.seller_id !== req.userId) {
         return res.status(403).json({
-          status: 'error',
-          message: 'You can only upload images to your own listings',
+          status: "error",
+          message: "You can only upload images to your own listings",
         });
       }
 
-      const imageUrl = `${req.protocol}://${req.get(
-        'host',
-      )}/uploads/${req.file.filename}`;
+      cloudinaryImage = await uploadImageToCloudinary(req.file);
 
       const imageResult = await pool.query(
         `
@@ -206,26 +231,30 @@ router.post(
           VALUES ($1, $2)
           RETURNING *
         `,
-        [listingId, imageUrl],
+        [listingId, cloudinaryImage.secure_url],
       );
 
       res.status(201).json({
-        status: 'ok',
-        message: 'Image uploaded successfully',
+        status: "ok",
+        message: "Image uploaded successfully",
         image: imageResult.rows[0],
       });
     } catch (error) {
-      console.error('Upload listing image error:', error);
+      if (cloudinaryImage) {
+        await deleteCloudinaryImages([cloudinaryImage]);
+      }
+
+      console.error("Upload listing image error:", error);
 
       res.status(500).json({
-        status: 'error',
-        message: 'Failed to upload image',
+        status: "error",
+        message: "Failed to upload image",
       });
     }
   },
 );
 
-router.post('/create', requireAuth, async (req, res) => {
+router.post("/create", requireAuth, async (req, res) => {
   try {
     const {
       universityId,
@@ -247,8 +276,8 @@ router.post('/create', requireAuth, async (req, res) => {
       !pickupLocation
     ) {
       return res.status(400).json({
-        status: 'error',
-        message: 'All listing fields are required',
+        status: "error",
+        message: "All listing fields are required",
       });
     }
 
@@ -280,24 +309,28 @@ router.post('/create', requireAuth, async (req, res) => {
     );
 
     res.status(201).json({
-      status: 'ok',
-      message: 'Listing created successfully',
+      status: "ok",
+      message: "Listing created successfully",
       listing: result.rows[0],
     });
   } catch (error) {
-    console.error('Create listing error:', error);
+    console.error("Create listing error:", error);
 
     res.status(500).json({
-      status: 'error',
-      message: 'Failed to create listing',
+      status: "error",
+      message: "Failed to create listing",
     });
   }
 });
 
-router.post('/', requireAuth, upload.array('images', 5), async (req, res) => {
-  const client = await pool.connect();
+router.post("/", requireAuth, upload.array("images", 5), async (req, res) => {
+  let client;
+  const uploadedImages = [];
+  let transactionStarted = false;
 
   try {
+    client = await pool.connect();
+
     const {
       universityId,
       title,
@@ -318,19 +351,25 @@ router.post('/', requireAuth, upload.array('images', 5), async (req, res) => {
       !pickupLocation
     ) {
       return res.status(400).json({
-        status: 'error',
-        message: 'All listing fields are required',
+        status: "error",
+        message: "All listing fields are required",
       });
     }
 
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({
-        status: 'error',
-        message: 'At least one image is required',
+        status: "error",
+        message: "At least one image is required",
       });
     }
 
-    await client.query('BEGIN');
+    for (const file of req.files) {
+      const image = await uploadImageToCloudinary(file);
+      uploadedImages.push(image);
+    }
+
+    await client.query("BEGIN");
+    transactionStarted = true;
 
     const listingResult = await client.query(
       `
@@ -361,11 +400,7 @@ router.post('/', requireAuth, upload.array('images', 5), async (req, res) => {
 
     const listing = listingResult.rows[0];
 
-    for (const file of req.files) {
-      const imageUrl = `${req.protocol}://${req.get(
-        'host',
-      )}/uploads/${file.filename}`;
-
+    for (const image of uploadedImages) {
       await client.query(
         `
           INSERT INTO listing_images (
@@ -374,45 +409,58 @@ router.post('/', requireAuth, upload.array('images', 5), async (req, res) => {
           )
           VALUES ($1, $2)
         `,
-        [listing.id, imageUrl],
+        [listing.id, image.secure_url],
       );
     }
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
+    transactionStarted = false;
 
     res.status(201).json({
-      status: 'ok',
-      message: 'Listing created successfully',
+      status: "ok",
+      message: "Listing created successfully",
       listing,
     });
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (transactionStarted && client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Listing transaction rollback failed:", rollbackError);
+      }
+    }
 
-    console.error('Create listing error:', error);
+    if (uploadedImages.length > 0) {
+      await deleteCloudinaryImages(uploadedImages);
+    }
+
+    console.error("Create listing error:", error);
 
     res.status(500).json({
-      status: 'error',
-      message: 'Failed to create listing',
+      status: "error",
+      message: "Failed to create listing",
     });
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 });
 
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
-      status: 'error',
+      status: "error",
       message: error.message,
     });
   }
 
   if (error) {
-    console.error('Upload error:', error);
+    console.error("Upload error:", error);
 
     return res.status(400).json({
-      status: 'error',
-      message: error.message || 'Image upload failed',
+      status: "error",
+      message: error.message || "Image upload failed",
     });
   }
 
